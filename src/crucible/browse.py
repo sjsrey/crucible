@@ -125,11 +125,14 @@ _LATEX_DISPLAY_RE = re.compile(r"\$\$(.+?)\$\$", re.DOTALL)
 _LATEX_INLINE_RE = re.compile(r"(?<![\\$])\$([^\s$][^$\n]*?[^\s$])\$(?!\$)|(?<![\\$])\$([^\s$])\$(?!\$)")
 
 
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"}
+
+
 def _rewrite_file_link(match: re.Match, current_path: str) -> str:
-    """Rewrite [[file:...][text]] to a working HTML link."""
+    """Rewrite [[file:...][text]] to a working HTML link (or an inline <img>
+    for image targets, matching how org-mode itself displays image links)."""
     target = match.group(1).strip()
-    display = match.group(2) or target.rsplit("/", 1)[-1].replace(".org", "")
-    display = html.escape(display)
+    caption = match.group(2)
     # Resolve relative to current file's directory
     current_dir = PurePosixPath(current_path).parent
     resolved = (current_dir / target).as_posix()
@@ -142,7 +145,21 @@ def _rewrite_file_link(match: re.Match, current_path: str) -> str:
         elif part and part != ".":
             parts.append(part)
     url = "/" + "/".join(parts)
-    return f'<a href="{html.escape(url)}">{display}</a>'
+    url_html = html.escape(url)
+
+    ext = PurePosixPath(target.split("::")[0]).suffix.lower()
+    if ext in _IMAGE_EXTENSIONS:
+        alt = html.escape(caption or PurePosixPath(target).name)
+        img = f'<img src="{url_html}" alt="{alt}" loading="lazy">'
+        if caption:
+            return (
+                f'<figure class="org-image"><a href="{url_html}">{img}</a>'
+                f"<figcaption>{html.escape(caption)}</figcaption></figure>"
+            )
+        return f'<a class="org-image" href="{url_html}">{img}</a>'
+
+    display = html.escape(caption or target.rsplit("/", 1)[-1].replace(".org", ""))
+    return f'<a href="{url_html}">{display}</a>'
 
 
 def _rewrite_plain_link(match: re.Match) -> str:
@@ -476,6 +493,17 @@ code {
 }
 p code, li code {
   background: var(--code-bg); padding: 1px 5px; border-radius: 3px;
+}
+
+/* Images */
+.org-image { display: block; margin: 16px 0; }
+.org-image img {
+  max-width: 100%; height: auto; border-radius: 6px;
+  border: 1px solid var(--border);
+}
+figure.org-image { margin: 16px 0; }
+figure.org-image figcaption {
+  margin-top: 6px; font-size: 13px; color: var(--text-dim); text-align: center;
 }
 
 /* Tables */
