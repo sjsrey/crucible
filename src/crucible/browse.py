@@ -7,6 +7,7 @@ citation rendering, and a navigable sidebar.
 import html
 import http.server
 import json
+import mimetypes
 import re
 import urllib.parse
 from pathlib import Path, PurePosixPath
@@ -965,27 +966,46 @@ class CrucibleHandler(http.server.BaseHTTPRequestHandler):
                 )
         elif path == "/_static/style.css":
             self._send_response(200, "text/css", _BROWSE_CSS.encode("utf-8"))
+        elif not path.endswith(".org"):
+            # Non-.org asset (image, PDF, etc. linked from an org file):
+            # serve the raw bytes instead of trying to parse them as org text.
+            self._serve_static(path)
         else:
             # Serve an org file
             self._serve_org(path)
 
-    def _serve_org(self, url_path: str):
-        """Convert and serve an org file."""
-        # Strip leading slash
+    def _resolve_wiki_path(self, url_path: str) -> Path | None:
+        """Resolve a request path to a file under wiki_dir, or None if invalid/outside."""
         rel = url_path.lstrip("/")
-        # Security: prevent path traversal
         try:
             file_path = (self.wiki_dir / rel).resolve()
             if not str(file_path).startswith(str(self.wiki_dir.resolve())):
                 self._send_error(403, "Forbidden")
-                return
+                return None
         except (ValueError, OSError):
             self._send_error(400, "Bad request")
-            return
+            return None
 
         if not file_path.exists() or not file_path.is_file():
             self._send_error(404, f"Not found: {rel}")
+            return None
+        return file_path
+
+    def _serve_static(self, url_path: str):
+        """Serve a non-.org file (image, PDF, etc.) as raw bytes."""
+        file_path = self._resolve_wiki_path(url_path)
+        if file_path is None:
             return
+        content_type, _ = mimetypes.guess_type(str(file_path))
+        body = file_path.read_bytes()
+        self._send_response(200, content_type or "application/octet-stream", body)
+
+    def _serve_org(self, url_path: str):
+        """Convert and serve an org file."""
+        file_path = self._resolve_wiki_path(url_path)
+        if file_path is None:
+            return
+        rel = url_path.lstrip("/")
 
         text = file_path.read_text(encoding="utf-8")
         title, content_html, filetags = org_to_html(text, rel, bib=self.bib)
