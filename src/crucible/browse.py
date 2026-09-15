@@ -253,7 +253,8 @@ def _process_inline(text: str, current_path: str,
     return text
 
 
-def _convert_table(table_text: str) -> str:
+def _convert_table(table_text: str, current_path: str = "",
+                   bib: dict[str, dict[str, str]] | None = None) -> str:
     """Convert org table lines to HTML table."""
     lines = [l.strip() for l in table_text.strip().splitlines() if l.strip()]
     rows = []
@@ -276,7 +277,7 @@ def _convert_table(table_text: str) -> str:
         tag = "th" if in_head and i == 0 else "td"
         out.append("<tr>")
         for cell in row:
-            out.append(f"  <{tag}>{html.escape(cell)}</{tag}>")
+            out.append(f"  <{tag}>{_process_inline(cell, current_path, bib)}</{tag}>")
         out.append("</tr>")
     out.append("</table>")
     return "\n".join(out)
@@ -409,7 +410,7 @@ def org_to_html(text: str, current_path: str = "",
 
     # Tables
     text = _TABLE_BLOCK_RE.sub(
-        lambda m: _placeholder(_convert_table(m.group(1))), text
+        lambda m: _placeholder(_convert_table(m.group(1), current_path, bib)), text
     )
 
     # Headings
@@ -1117,7 +1118,7 @@ class CrucibleHandler(http.server.BaseHTTPRequestHandler):
 
         self._serve_page(title or rel, "\n".join(parts))
 
-    def _serve_page(self, title: str, content: str):
+    def _serve_page(self, title: str, content: str, status: int = 200):
         """Wrap content in the page template and serve it."""
         github_link = ""
         if self.github_url:
@@ -1133,10 +1134,16 @@ class CrucibleHandler(http.server.BaseHTTPRequestHandler):
             project_name=html.escape(self.project_name),
             github_link=github_link,
         )
-        self._send_response(200, "text/html; charset=utf-8", page.encode("utf-8"))
+        self._send_response(status, "text/html; charset=utf-8", page.encode("utf-8"))
 
     def _send_error(self, code: int, message: str):
-        self._serve_page(f"Error {code}", f"<h1>{code}</h1><p>{html.escape(message)}</p>")
+        # Bug fix: this previously always served status 200 regardless of
+        # `code` (the error page's HTML said "Error 404" etc. but the HTTP
+        # response itself claimed success), so no client -- browser,
+        # curl -w '%{http_code}', or monitoring tooling -- could ever
+        # detect a broken link or bad request from the status code alone.
+        self._serve_page(f"Error {code}", f"<h1>{code}</h1><p>{html.escape(message)}</p>",
+                          status=code)
 
     def _send_response(self, code: int, content_type: str, body: bytes):
         self.send_response(code)
