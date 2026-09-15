@@ -108,6 +108,8 @@ _QUOTE_BLOCK_RE = re.compile(
 )
 _HEADING_RE = re.compile(r"^(\*{1,4})\s+(.+)$", re.MULTILINE)
 _TABLE_BLOCK_RE = re.compile(r"((?:^\|.*$\n?)+)", re.MULTILINE)
+_LIST_ITEM_RE = re.compile(r"^([ \t]*)([-+]|\d+[.)])[ \t]+(.*)$")
+_ORDERED_MARKER_RE = re.compile(r"^\d+[.)]$")
 
 # Inline patterns
 _FILE_LINK_RE = re.compile(
@@ -119,6 +121,7 @@ _PLAIN_LINK_RE = re.compile(
 _CITE_RE = re.compile(r"(cite[pt]?):([a-zA-Z0-9_:,-]+)")
 _BOLD_RE = re.compile(r"(?<![a-zA-Z0-9])\*([^\s*](?:.*?[^\s*])?)\*(?![a-zA-Z0-9])")
 _ITALIC_RE = re.compile(r"(?<![a-zA-Z0-9])/([^\s/](?:.*?[^\s/])?)/(?![a-zA-Z0-9])")
+_STRIKE_RE = re.compile(r"(?<![a-zA-Z0-9])\+([^\s+](?:.*?[^\s+])?)\+(?![a-zA-Z0-9])")
 _CODE_RE = re.compile(r"(?<![a-zA-Z0-9])~([^\s~](?:.*?[^\s~])?)~(?![a-zA-Z0-9])")
 _VERBATIM_RE = re.compile(r"(?<![a-zA-Z0-9])=([^\s=](?:.*?[^\s=])?)=(?![a-zA-Z0-9])")
 _LATEX_DISPLAY_RE = re.compile(r"\$\$(.+?)\$\$", re.DOTALL)
@@ -237,9 +240,11 @@ def _process_inline(text: str, current_path: str,
     text = _CODE_RE.sub(lambda m: _hold(f"<code>{html.escape(m.group(1))}</code>"), text)
     text = _VERBATIM_RE.sub(lambda m: _hold(f"<code>{html.escape(m.group(1))}</code>"), text)
 
-    # Bold and italic (safe now, all HTML-containing elements are placeholders)
+    # Bold, italic, strikethrough (safe now, all HTML-containing elements
+    # are placeholders)
     text = _BOLD_RE.sub(r"<strong>\1</strong>", text)
     text = _ITALIC_RE.sub(r"<em>\1</em>", text)
+    text = _STRIKE_RE.sub(r"<del>\1</del>", text)
 
     # Restore placeholders
     for key, value in _ph.items():
@@ -275,6 +280,57 @@ def _convert_table(table_text: str) -> str:
         out.append("</tr>")
     out.append("</table>")
     return "\n".join(out)
+
+
+def _convert_lists(text: str, placeholder_fn, current_path: str,
+                    bib: dict[str, dict[str, str]] | None) -> str:
+    """Find org list blocks (contiguous runs of '- '/'+ '/'1. ' items,
+    including indented continuation lines) and replace each block with a
+    placeholder holding its rendered <ul>/<ol> HTML.
+
+    Org list items are NOT separated by blank lines from one another (a
+    blank line ends the whole list), so without this step the later
+    blank-line paragraph split merges every item in a list into one
+    giant paragraph. Continuation lines are any non-blank line indented
+    further than the item's own marker. No nested-list support (not used
+    anywhere in this wiki's content); a more-indented line that itself
+    looks like a list item is still treated as plain continuation text.
+    """
+    lines = text.split("\n")
+    out_lines = []
+    i, n = 0, len(lines)
+    while i < n:
+        m = _LIST_ITEM_RE.match(lines[i])
+        if not m:
+            out_lines.append(lines[i])
+            i += 1
+            continue
+        base_indent = len(m.group(1))
+        items = []
+        while i < n:
+            mm = _LIST_ITEM_RE.match(lines[i])
+            if not mm or len(mm.group(1)) != base_indent:
+                break
+            ordered = bool(_ORDERED_MARKER_RE.match(mm.group(2)))
+            parts = [mm.group(3)]
+            i += 1
+            while i < n and lines[i].strip() != "":
+                nxt = lines[i]
+                indent = len(nxt) - len(nxt.lstrip(" \t"))
+                if indent <= base_indent:
+                    break
+                parts.append(nxt.strip())
+                i += 1
+            items.append((ordered, " ".join(p.strip() for p in parts)))
+        if not items:
+            continue
+        tag = "ol" if items[0][0] else "ul"
+        html_parts = [f"<{tag}>"]
+        for _, item_text in items:
+            html_parts.append(f"<li>{_process_inline(item_text, current_path, bib)}</li>")
+        html_parts.append(f"</{tag}>")
+        out_lines.append(placeholder_fn("\n".join(html_parts)))
+    return "\n".join(out_lines)
 
 
 def org_to_html(text: str, current_path: str = "",
@@ -364,6 +420,11 @@ def org_to_html(text: str, current_path: str = "",
         return _placeholder(f'<h{level} id="{slug}">{content}</h{level}>')
 
     text = _HEADING_RE.sub(_heading_repl, text)
+
+    # Lists (must happen before the paragraph split below: org list items
+    # are not blank-line-separated from each other, so without this step
+    # every item in a list collapses into one paragraph)
+    text = _convert_lists(text, _placeholder, current_path, bib)
 
     # Process remaining text as paragraphs with inline markup
     paragraphs = re.split(r"\n\s*\n", text)
@@ -474,6 +535,8 @@ a:hover { text-decoration: underline; }
 #content h3 { font-size: 18px; margin-top: 24px; margin-bottom: 8px; color: #fff; }
 #content h4 { font-size: 16px; margin-top: 20px; margin-bottom: 6px; color: #fff; }
 #content p { margin-bottom: 12px; }
+#content ul, #content ol { margin: 4px 0 16px 24px; }
+#content li { margin-bottom: 6px; }
 
 .tags { margin-bottom: 16px; }
 .tag {
