@@ -715,14 +715,6 @@ def ingest_source(
     if text:
         atomic_write_text(text_path, text)
 
-    # Determine title
-    if title is None:
-        title = extract_title(dest_path, text)
-
-    # Use today if no date given
-    if date is None:
-        date = datetime.now().strftime("%Y-%m-%d")
-
     # Relative path for database
     rel_path = str(dest_path.relative_to(root))
 
@@ -731,19 +723,43 @@ def ingest_source(
     if not doi:
         doi = extract_doi_from_text(text)
 
-    # Generate cite key and bib entry. Preference order:
+    # Resolve the bib entry before generating the cite key. Preference order:
     #   1. user-provided --bibtex string
     #   2. fetched from doi.org content negotiation (real entry type + fields)
     #   3. minimal entry from known metadata
-    cite_key = _unique_cite_key(generate_cite_key(title, authors, date), db)
+    # A resolved entry carries the real title, authors, and publication year,
+    # which fill in whatever the caller did not supply. Otherwise the key
+    # would come from the filename-derived title and today's date (e.g.
+    # map2026 for MacEachren 1982).
     bib_entry = None
     if bibtex and bibtex.strip().startswith("@"):
-        bib_entry = replace_cite_key(bibtex.strip(), cite_key)
+        bib_entry = bibtex.strip()
     elif doi:
-        fetched = fetch_bibtex_from_doi(doi)
-        if fetched:
-            bib_entry = replace_cite_key(fetched, cite_key)
-    if bib_entry is None:
+        bib_entry = fetch_bibtex_from_doi(doi)
+    if bib_entry is not None:
+        fields = _parse_bib_fields(bib_entry)
+        if title is None and fields.get("title"):
+            title = _bib_value(fields["title"])
+        if authors is None and fields.get("author"):
+            authors = _authors_from_bib(fields["author"])
+        # Match the year directly: it is often unbraced (year = 1982),
+        # which _parse_bib_fields does not capture.
+        year = re.search(r"\byear\s*=\s*[{\"]?\s*(\d{4})", bib_entry, re.IGNORECASE)
+        if date is None and year:
+            date = year.group(1)
+
+    # Determine title
+    if title is None:
+        title = extract_title(dest_path, text)
+
+    # Use today if no date given
+    if date is None:
+        date = datetime.now().strftime("%Y-%m-%d")
+
+    cite_key = _unique_cite_key(generate_cite_key(title, authors, date), db)
+    if bib_entry is not None:
+        bib_entry = replace_cite_key(bib_entry, cite_key)
+    else:
         bib_entry = generate_bib_entry(
             cite_key, title, authors, date, url, source_type, doi=doi,
         )
