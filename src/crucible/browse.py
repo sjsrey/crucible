@@ -87,8 +87,8 @@ def format_citation(entry: dict[str, str]) -> str:
 # ---------------------------------------------------------------------------
 
 # Block patterns
-_TITLE_RE = re.compile(r"^#\+TITLE:\s*(.+)$", re.MULTILINE)
-_FILETAGS_RE = re.compile(r"^#\+FILETAGS:\s*(.+)$", re.MULTILINE)
+_TITLE_RE = re.compile(r"^#\+TITLE:\s*(.+)$", re.MULTILINE | re.IGNORECASE)
+_FILETAGS_RE = re.compile(r"^#\+FILETAGS:\s*(.+)$", re.MULTILINE | re.IGNORECASE)
 _KEYWORD_RE = re.compile(r"^#\+\w+:.*$", re.MULTILINE)
 _DRAWER_RE = re.compile(
     r"^\s*:PROPERTIES:\s*\n(.*?)\n\s*:END:\s*$", re.MULTILINE | re.DOTALL
@@ -96,15 +96,15 @@ _DRAWER_RE = re.compile(
 _PROP_LINE_RE = re.compile(r"^\s*:([A-Z_]+):\s+(.+?)\s*$", re.MULTILINE)
 _SRC_BLOCK_RE = re.compile(
     r"^#\+BEGIN_SRC\s*(.*?)\s*\n(.*?)^#\+END_SRC\s*$",
-    re.MULTILINE | re.DOTALL,
+    re.MULTILINE | re.DOTALL | re.IGNORECASE,
 )
 _EXAMPLE_BLOCK_RE = re.compile(
     r"^#\+BEGIN_EXAMPLE\s*\n(.*?)^#\+END_EXAMPLE\s*$",
-    re.MULTILINE | re.DOTALL,
+    re.MULTILINE | re.DOTALL | re.IGNORECASE,
 )
 _QUOTE_BLOCK_RE = re.compile(
     r"^#\+BEGIN_QUOTE\s*\n(.*?)^#\+END_QUOTE\s*$",
-    re.MULTILINE | re.DOTALL,
+    re.MULTILINE | re.DOTALL | re.IGNORECASE,
 )
 _HEADING_RE = re.compile(r"^(\*{1,4})\s+(.+)$", re.MULTILINE)
 _TABLE_BLOCK_RE = re.compile(r"((?:^\|.*$\n?)+)", re.MULTILINE)
