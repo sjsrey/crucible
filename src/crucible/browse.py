@@ -485,9 +485,22 @@ a:hover { text-decoration: underline; }
 #sidebar {
   width: 260px; min-width: 260px; background: var(--panel);
   border-right: 1px solid var(--border);
-  padding: 16px; overflow-y: auto; position: fixed;
-  top: 0; bottom: 0; left: 0;
+  padding: 56px 16px 16px; overflow-y: auto; position: fixed;
+  top: 0; bottom: 0; left: 0; z-index: 20;
+  transition: transform 0.2s ease;
 }
+
+/* Sidebar toggle */
+#sidebar-toggle {
+  position: fixed; top: 12px; left: 12px; z-index: 30;
+  width: 36px; height: 36px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--panel);
+  color: var(--text); font-size: 18px; line-height: 1; cursor: pointer;
+}
+#sidebar-toggle:hover { border-color: var(--accent); color: var(--accent); }
+#sidebar-backdrop { display: none; }
+body.sidebar-collapsed #sidebar { transform: translateX(-100%); }
+body.sidebar-collapsed #content { margin-left: 0; padding-top: 64px; }
 #sidebar h1 {
   font-size: 16px; color: var(--accent); margin-bottom: 12px;
   letter-spacing: 0.5px;
@@ -670,6 +683,22 @@ a.citation:hover { border-bottom-style: solid; text-decoration: none; }
   vertical-align: middle;
 }
 .vscode-link:hover { color: var(--link); border-color: var(--link); text-decoration: none; }
+
+/* Narrow screens: sidebar becomes an overlay drawer. Keep this block last
+   so it overrides the base #sidebar / #content rules above. */
+@media (max-width: 800px) {
+  #sidebar { transform: translateX(-100%); width: 82vw; min-width: 0; max-width: 300px; }
+  body.sidebar-open #sidebar { transform: none; }
+  body.sidebar-open #sidebar-backdrop {
+    display: block; position: fixed; inset: 0; z-index: 10;
+    background: rgba(0, 0, 0, 0.5);
+  }
+  #content, body.sidebar-collapsed #content {
+    margin-left: 0; padding: 64px 16px 32px; max-width: 100%; min-width: 0;
+  }
+  #content pre, #content table { max-width: 100%; overflow-x: auto; }
+  #content img { max-width: 100%; height: auto; }
+}
 """
 
 _BROWSE_TEMPLATE = """\
@@ -691,6 +720,13 @@ _BROWSE_TEMPLATE = """\
   }});"></script>
 </head>
 <body>
+<script>
+try {{ if (localStorage.getItem('crucible-sidebar') === 'collapsed')
+  document.body.classList.add('sidebar-collapsed'); }} catch (e) {{}}
+</script>
+<button id="sidebar-toggle" type="button" aria-label="Toggle sidebar"
+  aria-controls="sidebar">&#9776;</button>
+<div id="sidebar-backdrop"></div>
 <nav id="sidebar">
   <h1><a href="/">Crucible</a></h1>
   <div class="project-name">{project_name}</div>
@@ -715,6 +751,25 @@ function copyBibtex(btn) {{
     }}, 2000);
   }});
 }}
+(function() {{
+  var body = document.body;
+  var mobile = window.matchMedia('(max-width: 800px)');
+  function toggle() {{
+    if (mobile.matches) {{
+      body.classList.toggle('sidebar-open');
+    }} else {{
+      var c = body.classList.toggle('sidebar-collapsed');
+      try {{ localStorage.setItem('crucible-sidebar', c ? 'collapsed' : 'open'); }} catch (e) {{}}
+    }}
+  }}
+  document.getElementById('sidebar-toggle').addEventListener('click', toggle);
+  document.getElementById('sidebar-backdrop').addEventListener('click', function() {{
+    body.classList.remove('sidebar-open');
+  }});
+  document.addEventListener('keydown', function(e) {{
+    if (e.key === 'Escape') body.classList.remove('sidebar-open');
+  }});
+}})();
 </script>
 </body>
 </html>
