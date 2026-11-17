@@ -47,6 +47,35 @@ def parse_bibtex(text: str) -> dict[str, dict[str, str]]:
     return entries
 
 
+class BibCache:
+    """A bibtex file parsed on demand and re-parsed when it changes on disk.
+
+    The file's (mtime, size) is checked on every get(), which costs one
+    stat call; the file is only read and parsed again when that changes.
+    A missing file gives an empty dict.
+    """
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._stamp: tuple[int, int] | None = None
+        self._entries: dict[str, dict[str, str]] = {}
+
+    def get(self) -> dict[str, dict[str, str]]:
+        try:
+            st = self.path.stat()
+            stamp = (st.st_mtime_ns, st.st_size)
+        except FileNotFoundError:
+            stamp = None
+        if stamp != self._stamp:
+            try:
+                text = self.path.read_text(encoding="utf-8") if stamp else ""
+            except FileNotFoundError:
+                stamp, text = None, ""
+            self._entries = parse_bibtex(text)
+            self._stamp = stamp
+        return self._entries
+
+
 def reconstruct_bibtex(key: str, entry: dict[str, str]) -> str:
     """Reconstruct a bibtex entry string from parsed fields."""
     entry_type = entry.get("_type", "misc")
@@ -1041,9 +1070,13 @@ class CrucibleHandler(http.server.BaseHTTPRequestHandler):
     nav_html: str
     articles: list[dict]
     db_path: Path  # we reopen per-request to avoid threading issues
-    bib: dict[str, dict[str, str]]
+    bib_cache: "BibCache"
     project_name: str
     github_url: str
+
+    @property
+    def bib(self) -> dict[str, dict[str, str]]:
+        return self.bib_cache.get()
 
     def do_GET(self):  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
@@ -1204,12 +1237,10 @@ def start_server(wiki_dir: Path, db_path: Path, articles: list[dict],
     CrucibleHandler.project_name = project_name
     CrucibleHandler.github_url = github_url
 
-    # Load references.bib for citation tooltips
-    bib_path = db_path.parent / "references.bib"
-    if bib_path.exists():
-        CrucibleHandler.bib = parse_bibtex(bib_path.read_text(encoding="utf-8"))
-    else:
-        CrucibleHandler.bib = {}
+    # references.bib feeds citation tooltips and the References page. It is
+    # re-read whenever it changes, so sources ingested while the server runs
+    # show up without a restart.
+    CrucibleHandler.bib_cache = BibCache(db_path.parent / "references.bib")
 
     server = http.server.HTTPServer(("127.0.0.1", port), CrucibleHandler)
     return server
