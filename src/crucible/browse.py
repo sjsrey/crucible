@@ -47,6 +47,15 @@ def parse_bibtex(text: str) -> dict[str, dict[str, str]]:
     return entries
 
 
+def _file_stamp(path: Path) -> tuple[int, int] | None:
+    """(mtime_ns, size) of a file, or None if it does not exist."""
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
 class BibCache:
     """A bibtex file parsed on demand and re-parsed when it changes on disk.
 
@@ -61,11 +70,7 @@ class BibCache:
         self._entries: dict[str, dict[str, str]] = {}
 
     def get(self) -> dict[str, dict[str, str]]:
-        try:
-            st = self.path.stat()
-            stamp = (st.st_mtime_ns, st.st_size)
-        except FileNotFoundError:
-            stamp = None
+        stamp = _file_stamp(self.path)
         if stamp != self._stamp:
             try:
                 text = self.path.read_text(encoding="utf-8") if stamp else ""
@@ -1062,21 +1067,87 @@ def _build_about_html(wiki_dir: Path, db_path: Path, articles: list[dict],
     return "\n".join(parts)
 
 
+class ArticleCache:
+    """The article list and sidebar nav, rebuilt when crucible.db changes.
+
+    `crucible sync` writes the database, so articles added, renamed or
+    removed while the server runs appear in the nav without a restart.
+    The database runs in WAL mode, where a write may only reach the -wal
+    file until a checkpoint, so both files are stat'ed on every get().
+    If the database cannot be read (e.g. mid-write), the previous list is
+    kept and the read is retried on the next request.
+    """
+
+    def __init__(self, db_path: Path, articles: list[dict] | None = None):
+        self.db_path = db_path
+        self._paths = (db_path, db_path.with_name(db_path.name + "-wal"))
+        self._stamp = None
+        self._articles: list[dict] = []
+        self._nav_html = _build_nav_html([])
+        if articles is not None:
+            # Seed with the list the caller already loaded at this stamp.
+            self._stamp = self._current_stamp()
+            self._set(articles)
+
+    def _current_stamp(self):
+        return tuple(_file_stamp(p) for p in self._paths)
+
+    def _set(self, articles: list[dict]) -> None:
+        self._articles = articles
+        self._nav_html = _build_nav_html(articles)
+
+    def _refresh(self) -> None:
+        stamp = self._current_stamp()
+        if stamp == self._stamp:
+            return
+        if stamp[0] is None:
+            self._set([])
+        else:
+            from crucible.database import CrucibleDB
+            try:
+                db = CrucibleDB(self.db_path)
+                try:
+                    articles = db.list_articles()
+                finally:
+                    db.close()
+            except Exception:  # libsql reports SQL errors as ValueError
+                return
+            self._set(articles)
+        self._stamp = stamp
+
+    @property
+    def articles(self) -> list[dict]:
+        self._refresh()
+        return self._articles
+
+    @property
+    def nav_html(self) -> str:
+        self._refresh()
+        return self._nav_html
+
+
 class CrucibleHandler(http.server.BaseHTTPRequestHandler):
     """Request handler for the Crucible wiki browser."""
 
     # Set by start_server before creating the HTTPServer
     wiki_dir: Path
-    nav_html: str
-    articles: list[dict]
     db_path: Path  # we reopen per-request to avoid threading issues
     bib_cache: "BibCache"
+    article_cache: ArticleCache
     project_name: str
     github_url: str
 
     @property
     def bib(self) -> dict[str, dict[str, str]]:
         return self.bib_cache.get()
+
+    @property
+    def articles(self) -> list[dict]:
+        return self.article_cache.articles
+
+    @property
+    def nav_html(self) -> str:
+        return self.article_cache.nav_html
 
     def do_GET(self):  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
@@ -1231,9 +1302,8 @@ def start_server(wiki_dir: Path, db_path: Path, articles: list[dict],
                  github_url: str = "") -> http.server.HTTPServer:
     """Create and return the HTTP server (does not start serving)."""
     CrucibleHandler.wiki_dir = wiki_dir
-    CrucibleHandler.nav_html = _build_nav_html(articles)
-    CrucibleHandler.articles = articles
     CrucibleHandler.db_path = db_path
+    CrucibleHandler.article_cache = ArticleCache(db_path, articles)
     CrucibleHandler.project_name = project_name
     CrucibleHandler.github_url = github_url
 
